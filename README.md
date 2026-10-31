@@ -78,7 +78,7 @@ Other configuration options:
 
 - `ZSH_COPILOT_KEY`: Key to press to get suggestions (default: ^z)
 - `ZSH_COPILOT_SEND_CONTEXT`: If `true`, zsh-copilot will send context information to the AI model (default: true)
-- `ZSH_COPILOT_DEBUG`: Enable debug logging (default: false)
+- `ZSH_COPILOT_DEBUG`: Enable private, per-request metadata logging (default: false)
 - `ZSH_COPILOT_TIMEOUT`: Request timeout in seconds (default: 60)
 
 To see all available configurations and their current values, run:
@@ -90,6 +90,42 @@ zsh-copilot
 ## Usage
 
 Type in your command or your message and press `CTRL + Z` to get your suggestion!
+
+Suggestions must start with `+` (completion) or `=` (replacement), contain a
+nonempty body, and fit within 8192 characters including the prefix. Control
+characters, including newlines, tabs and terminal escape sequences, are rejected.
+A replacement is placed directly in the editable command buffer; review it and
+press Enter to run it. Validation checks formatting, not command safety.
+
+### Context and temporary files
+
+Context sending remains enabled by default. Each request collects the username,
+user/group IDs, current directory, shell, terminal type, `uname -a` and OS release
+information. It does not collect shell history, project files, `PATH`, tool lists
+or the full environment. Set `ZSH_COPILOT_SEND_CONTEXT=false` to omit machine
+context; the input before the cursor is still sent.
+
+The user message contains a JSON object with `input` and `context` fields. Context
+is kept out of the system instructions and marked as untrusted data. This
+separation does not guarantee protection against prompt injection.
+
+Each request uses a private directory created by `mktemp -d` under `${TMPDIR:-/tmp}`.
+On completion, failure or cancellation, the plugin stops its HTTP worker before
+removing temporary files. Signal traps are scoped to the function.
+
+With debug enabled, only a small `debug.log` containing the timestamp and curl
+exit code is retained in that directory, and its path is displayed in Zsh. The
+directory has mode `700` and the log has mode `600`. Logs omit API keys, endpoint
+URLs, input, context and responses. Remove retained debug directories when you
+no longer need them; debug is off by default.
+
+### API key storage
+
+The plugin reads `ZSH_COPILOT_API_KEY` from the shell and does not persist it.
+You can keep its assignment in a separate file, for example
+`~/.config/zsh-copilot/credentials.zsh`, give that file mode `600`, and source it
+from `.zshrc` before loading the plugin. Keep this file outside the repository.
+This restricts file access; it is not encrypted secret storage.
 
 ## Development
 
