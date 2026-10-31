@@ -11,18 +11,6 @@
 (( ! ${+ZSH_COPILOT_DEBUG} )) &&
     typeset -g ZSH_COPILOT_DEBUG=false
 
-# New option to select AI provider
-if [[ -z "$ZSH_COPILOT_AI_PROVIDER" ]]; then
-    if [[ -n "$OPENAI_API_KEY" ]]; then
-        typeset -g ZSH_COPILOT_AI_PROVIDER="openai"
-    elif [[ -n "$ANTHROPIC_API_KEY" ]]; then
-        typeset -g ZSH_COPILOT_AI_PROVIDER="anthropic"
-    else
-        echo "No AI provider selected. Please set either OPENAI_API_KEY or ANTHROPIC_API_KEY."
-        return 1
-    fi
-fi
-
 # System prompt
 if [[ -z "$ZSH_COPILOT_SYSTEM_PROMPT" ]]; then
 read -r -d '' ZSH_COPILOT_SYSTEM_PROMPT <<- EOM
@@ -56,84 +44,47 @@ if [[ "$ZSH_COPILOT_DEBUG" == 'true' ]]; then
     touch /tmp/zsh-copilot.log
 fi
 
+# All endpoints use the OpenAI-compatible Chat Completions protocol.
 function _fetch_suggestions() {
-    local data
-    local response
-    local message
+    local data response message response_code
+    local -a headers
 
-    if [[ "$ZSH_COPILOT_AI_PROVIDER" == "openai" ]]; then
-        # OpenAI's API payload
-        data="{
-            \"model\": \"gpt-4o-mini\",
-            \"messages\": [
-                {
-                    \"role\": \"system\",
-                    \"content\": \"$full_prompt\"
-                },
-                {
-                    \"role\": \"user\",
-                    \"content\": \"$input\"
-                }
-            ]
-        }"
-        response=$(curl "https://${openai_api_url}/v1/chat/completions" \
-            --silent \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -d "$data")
-        response_code=$?
-
-        if [[ "$ZSH_COPILOT_DEBUG" == 'true' ]]; then
-            echo "{\"date\":\"$(date)\",\"log\":\"Called OpenAI API\",\"input\":\"$input\",\"response\":\"$response\",\"response_code\":\"$response_code\"}" >> /tmp/zsh-copilot.log
-        fi
-
-        if [[ $response_code -ne 0 ]]; then
-            echo "Error fetching suggestions from the OpenAI API. Please check your API key and try again." > /tmp/.zsh_copilot_error
-            return 1
-        fi
-
-        message=$(echo "$response" | tr -d '\n' | jq -r '.choices[0].message.content')
-    elif [[ "$ZSH_COPILOT_AI_PROVIDER" == "anthropic" ]]; then
-        # Anthropic's API payload
-        data="{
-            \"model\": \"claude-3-5-sonnet-latest\",
-            \"max_tokens\": 1000,
-            \"system\": \"$full_prompt\",
-            \"messages\": [
-                {
-                    \"role\": \"user\",
-                    \"content\": \"$input\"
-                }
-            ]
-        }"
-        response=$(curl "https://${anthropic_api_url}/v1/messages" \
-            --silent \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -d "$data")
-        response_code=$?
-
-        if [[ "$ZSH_COPILOT_DEBUG" == 'true' ]]; then
-            echo "{\"date\":\"$(date)\",\"log\":\"Called Anthropic API\",\"input\":\"$input\",\"response\":\"$response\",\"response_code\":\"$response_code\"}" >> /tmp/zsh-copilot.log
-        fi
-
-        if [[ $response_code -ne 0 ]] || [[ $(echo "$response" | jq -r '.type') == 'error' ]]; then
-            if [[ "$ZSH_COPILOT_DEBUG" == 'true' ]]; then
-                echo "{\"date\":\"$(date)\",\"log\":\"Error fetching Anthropic\"}" >> /tmp/zsh-copilot.log
-            fi
-
-            echo "Error fetching suggestions from the Anthropic API. Please check your API key and try again." > /tmp/.zsh_copilot_error
-            return 1
-        fi
-
-        message=$(echo "$response" | tr -d '\n' | jq -r '.content[0].text')
-    else
-        echo "Invalid AI provider selected. Please choose 'openai' or 'anthropic'."
+    if [[ "$ZSH_COPILOT_ENDPOINT" != http://* && "$ZSH_COPILOT_ENDPOINT" != https://* ]] || [[ -z "$ZSH_COPILOT_MODEL" ]]; then
+        print -r -- "Set ZSH_COPILOT_ENDPOINT (full http(s) Chat Completions URL) and ZSH_COPILOT_MODEL." > /tmp/.zsh_copilot_error
         return 1
     fi
 
-    echo "$message" > /tmp/zsh_copilot_suggestion || return 1
+    headers=(-H "Content-Type: application/json")
+    [[ -n "$ZSH_COPILOT_API_KEY" ]] && headers+=(-H "Authorization: Bearer $ZSH_COPILOT_API_KEY")
+    data=$(jq -cn --arg model "$ZSH_COPILOT_MODEL" --arg system "$full_prompt" --arg input "$input" \
+        '{model: $model, stream: false, messages: [
+          {role: "system", content: $system}, {role: "user", content: $input}]}') || return 1
+
+    response=$(curl --silent --show-error --fail \
+        --connect-timeout 10 --max-time "${ZSH_COPILOT_TIMEOUT:-60}" \
+        "$ZSH_COPILOT_ENDPOINT" "${headers[@]}" -d "$data")
+    response_code=$?
+
+    if [[ "$ZSH_COPILOT_DEBUG" == true ]]; then
+        jq -cn --arg date "$(date)" --arg endpoint "$ZSH_COPILOT_ENDPOINT" \
+            --arg input "$input" --arg response "$response" --arg code "$response_code" \
+            '{date: $date, endpoint: $endpoint, input: $input, response: $response, response_code: $code}' \
+            >> /tmp/zsh-copilot.log
+    fi
+
+    if (( response_code != 0 )); then
+        print -r -- "Error fetching suggestions from $ZSH_COPILOT_ENDPOINT (curl exit $response_code). Check endpoint, credentials and model." > /tmp/.zsh_copilot_error
+        return 1
+    fi
+
+    message=$(print -r -- "$response" | jq -er \
+        'select(.error == null) | .choices[0].message.content | select(type == "string" and length > 0)' 2>/dev/null)
+    if (( $? != 0 )) || [[ "$message" == *$'\n'* || ( "$message" != '+'* && "$message" != '='* ) || "$message" == '+='* || "$message" == '=+'* ]]; then
+        print -r -- "Invalid or empty suggestion from $ZSH_COPILOT_ENDPOINT. Check model support and API response (enable ZSH_COPILOT_DEBUG for details)." > /tmp/.zsh_copilot_error
+        return 1
+    fi
+
+    print -r -- "$message" > /tmp/zsh_copilot_suggestion || return 1
 }
 
 
@@ -169,8 +120,6 @@ function _show_loading_animation() {
 
 function _suggest_ai() {
     #### Prepare environment
-    local openai_api_url=${OPENAI_API_URL:-"api.openai.com"}
-    local anthropic_api_url=${ANTHROPIC_API_URL:-"api.anthropic.com"}
 
     local context_info=""
     if [[ "$ZSH_COPILOT_SEND_CONTEXT" == 'true' ]]; then
@@ -188,13 +137,13 @@ function _suggest_ai() {
     fi
 
     ##### Get input
-    rm -f /tmp/zsh_copilot_suggestion
-    local input=$(echo "${BUFFER:0:$CURSOR}" | tr '\n' ';')
-    input=$(echo "$input" | sed 's/"/\\"/g')
+    rm -f /tmp/zsh_copilot_suggestion /tmp/.zsh_copilot_error
+    local input="${BUFFER:0:$CURSOR}"
+    input=${input//$'\n'/;}
 
     _zsh_autosuggest_clear
 
-    local full_prompt=$(echo "$ZSH_COPILOT_SYSTEM_PROMPT $context_info" | tr -d '\n')
+    local full_prompt="$ZSH_COPILOT_SYSTEM_PROMPT $context_info"
 
     ##### Fetch message
     read < <(_fetch_suggestions & echo $!)
@@ -243,7 +192,10 @@ function zsh-copilot() {
     echo "Configurations:"
     echo "    - ZSH_COPILOT_KEY: Key to press to get suggestions (default: ^z, value: $ZSH_COPILOT_KEY)."
     echo "    - ZSH_COPILOT_SEND_CONTEXT: If \`true\`, zsh-copilot will send context information (whoami, shell, pwd, etc.) to the AI model (default: true, value: $ZSH_COPILOT_SEND_CONTEXT)."
-    echo "    - ZSH_COPILOT_AI_PROVIDER: AI provider to use ('openai' or 'anthropic', value: $ZSH_COPILOT_AI_PROVIDER)."
+    echo "    - ZSH_COPILOT_ENDPOINT: Full OpenAI-compatible Chat Completions URL (value: $ZSH_COPILOT_ENDPOINT)."
+    echo "    - ZSH_COPILOT_MODEL: Model name (value: $ZSH_COPILOT_MODEL)."
+    echo "    - ZSH_COPILOT_API_KEY: API key (optional for local endpoints)."
+    echo "    - ZSH_COPILOT_TIMEOUT: Request timeout in seconds (default: 60, value: ${ZSH_COPILOT_TIMEOUT:-60})."
     echo "    - ZSH_COPILOT_SYSTEM_PROMPT: System prompt to use for the AI model (uses a built-in prompt by default)."
 }
 

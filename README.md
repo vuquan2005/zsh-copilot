@@ -42,29 +42,44 @@ echo "source ~/.config/zsh-copilot/zsh-copilot.plugin.zsh" >> ~/.zshrc
 
 ## Configuration
 
-You need to have an API key for either OpenAI or Anthropic to use this plugin. Expose this via the appropriate environment variable:
-
-For OpenAI (default):
-```sh
-export OPENAI_API_KEY=<your-openai-api-key>
-```
-
-For Anthropic:
-```sh
-export ANTHROPIC_API_KEY=<your-anthropic-api-key>
-```
-
-You can configure the AI provider using the `ZSH_COPILOT_AI_PROVIDER` variable:
+Set these variables in `.zshrc` **before** loading the plugin:
 
 ```sh
-export ZSH_COPILOT_AI_PROVIDER="openai"  # or "anthropic"
+export ZSH_COPILOT_ENDPOINT="https://api.openai.com/v1/chat/completions"
+export ZSH_COPILOT_MODEL="gpt-4o-mini"
+export ZSH_COPILOT_API_KEY="your-api-key"
 ```
+
+The endpoint must be the **full Chat Completions URL**, not just the server's
+base URL. Any service exposing the OpenAI-compatible Chat Completions protocol
+can be used with the same three settings:
+
+| Service | `ZSH_COPILOT_ENDPOINT` | Example `ZSH_COPILOT_MODEL` |
+| --- | --- | --- |
+| OpenAI | `https://api.openai.com/v1/chat/completions` | `gpt-4o-mini` |
+| Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `gemini-2.5-flash` |
+| Ollama local | `http://localhost:11434/v1/chat/completions` | `llama3.2` |
+| Grok (xAI) | `https://api.x.ai/v1/chat/completions` | `grok-3-mini` |
+
+Choose a model available on your server/account. For Ollama, download the model
+first (for example, `ollama pull llama3.2`) and leave `ZSH_COPILOT_API_KEY` unset
+or empty for a local server without authentication.
+
+Protocol references: [Gemini](https://ai.google.dev/gemini-api/docs/openai),
+[Ollama](https://docs.ollama.com/api/openai-compatibility),
+[xAI](https://docs.x.ai/docs/api-reference).
+
+These settings replace `ZSH_COPILOT_AI_PROVIDER`, `OPENAI_API_URL`,
+`ANTHROPIC_API_URL`, and the provider-specific key variables. Existing users
+should migrate to the three settings above. Native Anthropic Messages endpoints
+use a different protocol; use an OpenAI-compatible gateway for those models.
 
 Other configuration options:
 
 - `ZSH_COPILOT_KEY`: Key to press to get suggestions (default: ^z)
 - `ZSH_COPILOT_SEND_CONTEXT`: If `true`, zsh-copilot will send context information to the AI model (default: true)
 - `ZSH_COPILOT_DEBUG`: Enable debug logging (default: false)
+- `ZSH_COPILOT_TIMEOUT`: Request timeout in seconds (default: 60)
 
 To see all available configurations and their current values, run:
 
@@ -76,3 +91,10 @@ zsh-copilot
 
 Type in your command or your message and press `CTRL + Z` to get your suggestion!
 
+## Development
+
+Run offline request/response checks with real zsh and jq and a mocked HTTP client:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
