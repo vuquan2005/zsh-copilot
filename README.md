@@ -113,8 +113,12 @@ Each request uses a private directory created by `mktemp -d` under `${TMPDIR:-/t
 On completion, failure or cancellation, the plugin stops its HTTP worker before
 removing temporary files. Signal traps are scoped to the function.
 
-With debug enabled, only a small `debug.log` containing the timestamp and curl
-exit code is retained in that directory, and its path is displayed in Zsh. The
+HTTP failures display the status code and a bounded, sanitized provider error
+message, with the configured API key redacted. Internal background jobs do not
+print job IDs or completion notices into the prompt.
+
+With debug enabled, only a small `debug.log` containing the timestamp, curl
+exit code and HTTP status is retained in that directory, and its path is displayed in Zsh. The
 directory has mode `700` and the log has mode `600`. Logs omit API keys, endpoint
 URLs, input, context and responses. Remove retained debug directories when you
 no longer need them; debug is off by default.
